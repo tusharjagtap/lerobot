@@ -30,7 +30,11 @@ class RemoteLeaderAgent:
         self.robot_id = robot_id
         self.agent_name = agent_name
         self.location = location
-        self.central_server_url = f"ws://{central_server_host}:{central_server_port}"
+        # Use secure WebSocket (wss://) for Cloud Run HTTPS endpoints
+        if central_server_port == 443:
+            self.central_server_url = f"wss://{central_server_host}"
+        else:
+            self.central_server_url = f"ws://{central_server_host}:{central_server_port}"
         
         # Create leader robot
         self.robot_config = SO101LeaderConfig(
@@ -186,8 +190,8 @@ async def main():
         "robot_id": "remote_leader_1",
         "agent_name": "control_station_leader", 
         "location": "Control Station Room A",
-        "central_server_host": "127.0.0.1",  # IP address of central server
-        "central_server_port": 8081
+        "central_server_host": "lerobot-central-teleop-671396067800.us-central1.run.app",  # Cloud Run service URL
+        "central_server_port": 443  # HTTPS port for Cloud Run
     }
     
     agent = RemoteLeaderAgent(**config)

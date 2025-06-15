@@ -9,7 +9,7 @@ import asyncio
 import logging
 import json
 import websockets
-from typing import Optional
+from typing import Optional, Any
 
 from lerobot.common.robots.so101_follower import SO101Follower, SO101FollowerConfig
 
@@ -30,7 +30,11 @@ class RemoteFollowerAgent:
         self.robot_id = robot_id
         self.agent_name = agent_name
         self.location = location
-        self.central_server_url = f"ws://{central_server_host}:{central_server_port}"
+        # Use secure WebSocket (wss://) for Cloud Run HTTPS endpoints
+        if central_server_port == 443:
+            self.central_server_url = f"wss://{central_server_host}"
+        else:
+            self.central_server_url = f"ws://{central_server_host}:{central_server_port}"
         
         # Create follower robot
         self.robot_config = SO101FollowerConfig(
@@ -38,7 +42,7 @@ class RemoteFollowerAgent:
             id=robot_id
         )
         self.robot = SO101Follower(self.robot_config)
-        self.websocket: Optional[websockets.WebSocketClientProtocol] = None
+        self.websocket: Optional[Any] = None
         
     async def start(self):
         """Start the remote follower agent."""
@@ -152,8 +156,8 @@ async def main():
         "robot_id": "remote_follower_1",
         "agent_name": "warehouse_robot_1", 
         "location": "Warehouse Floor 2",
-        "central_server_host": "127.0.0.1",  # Changed to localhost since running on same machine
-        "central_server_port": 8081  # Make sure port is specified
+        "central_server_host": "lerobot-central-teleop-671396067800.us-central1.run.app",  # Cloud Run service URL
+        "central_server_port": 443  # HTTPS port for Cloud Run
     }
     
     agent = RemoteFollowerAgent(**config)
