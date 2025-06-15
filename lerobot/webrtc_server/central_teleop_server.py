@@ -61,8 +61,12 @@ class CentralTeleoperationServer:
         await self.webrtc_server.start()
         
         # Start WebSocket server for remote followers
+        # Create a wrapper function to properly handle the method binding
+        async def websocket_handler(websocket):
+            await self.handle_remote_follower(websocket)
+        
         self.websocket_server = await websockets.serve(
-            self.handle_remote_follower,
+            websocket_handler,
             "0.0.0.0", 
             self.websocket_port
         )
@@ -74,7 +78,7 @@ class CentralTeleoperationServer:
         logger.info(f"   WebRTC (leader): http://0.0.0.0:8080")
         logger.info(f"   WebSocket (followers): ws://0.0.0.0:{self.websocket_port}")
         
-    async def handle_remote_follower(self, websocket, path):
+    async def handle_remote_follower(self, websocket):
         """Handle connections from remote follower agents."""
         try:
             logger.info(f"New remote follower connecting from {websocket.remote_address}")
@@ -124,15 +128,20 @@ class CentralTeleoperationServer:
             
     async def start_teleoperation(self):
         """Start teleoperation from leader to all remote followers."""
-        # Connect leader robot
-        success = await self.webrtc_server.robot_manager.connect_robot("leader")
-        if not success:
-            logger.error("Failed to connect leader robot!")
+        try:
+            # Only try to connect leader if it exists
+            if "leader" in self.webrtc_server.robot_manager.robots:
+                success = await self.webrtc_server.robot_manager.connect_robot("leader")
+                if not success:
+                    logger.warning("Failed to connect leader robot! Teleoperation will run without leader.")
+                    # Continue anyway - we can still communicate with followers
+                    
+            self.teleoperation_active = True
+            logger.info(f"🎮 Teleoperation started! Connected to {len(self.remote_followers)} remote followers")
+            return True
+        except Exception as e:
+            logger.error(f"Error starting teleoperation: {e}")
             return False
-            
-        self.teleoperation_active = True
-        logger.info(f"🎮 Teleoperation started! Connected to {len(self.remote_followers)} remote followers")
-        return True
         
     async def stop_teleoperation(self):
         """Stop teleoperation."""
@@ -158,30 +167,43 @@ class CentralTeleoperationServer:
                 continue
                 
             try:
-                # Get action from leader robot
-                leader_action = await self.webrtc_server.robot_manager.get_action("leader")
-                
-                # Send action to all remote followers
-                action_message = json.dumps({
-                    "type": "action",
-                    "action": leader_action,
-                    "timestamp": asyncio.get_event_loop().time()
-                })
-                
-                # Send to all connected followers
-                disconnected_followers = []
-                for name, follower in self.remote_followers.items():
+                # Check if we have a leader robot and it's connected
+                leader_action = None
+                if "leader" in self.webrtc_server.robot_manager.robots:
                     try:
-                        await follower.websocket.send(action_message)
-                    except websockets.exceptions.ConnectionClosed:
-                        disconnected_followers.append(name)
+                        leader_robot = self.webrtc_server.robot_manager.robots["leader"]
+                        if leader_robot.is_connected:
+                            # Get action from leader robot
+                            leader_action = await self.webrtc_server.robot_manager.get_action("leader")
+                        else:
+                            logger.debug("Leader robot not connected, skipping action")
                     except Exception as e:
-                        logger.error(f"Error sending to {name}: {e}")
+                        logger.debug(f"Error getting leader action: {e}")
                 
-                # Clean up disconnected followers
-                for name in disconnected_followers:
-                    del self.remote_followers[name]
-                    logger.warning(f"Removed disconnected follower: {name}")
+                # If we have an action from leader, send it to followers
+                if leader_action:
+                    logger.debug(f"📤 Sending action to {len(self.remote_followers)} followers: {leader_action}")
+                    
+                    action_message = json.dumps({
+                        "type": "action",
+                        "action": leader_action,
+                        "timestamp": asyncio.get_event_loop().time()
+                    })
+                    
+                    # Send to all connected followers
+                    disconnected_followers = []
+                    for name, follower in self.remote_followers.items():
+                        try:
+                            await follower.websocket.send(action_message)
+                        except websockets.exceptions.ConnectionClosed:
+                            disconnected_followers.append(name)
+                        except Exception as e:
+                            logger.error(f"Error sending to {name}: {e}")
+                    
+                    # Clean up disconnected followers
+                    for name in disconnected_followers:
+                        del self.remote_followers[name]
+                        logger.warning(f"Removed disconnected follower: {name}")
                 
                 # Control frequency (30 Hz)
                 await asyncio.sleep(1/30)
@@ -207,10 +229,13 @@ class CentralTeleoperationServer:
 
 async def main():
     """Run the central teleoperation server."""
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.DEBUG,  # Changed to DEBUG for better troubleshooting
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
     
     # Configure your leader robot port
-    LEADER_PORT = "/dev/tty.usbmodem58A60699991"  # Update this
+    LEADER_PORT = "/dev/tty.usbmodem585A0078841"  # Update this
     
     server = CentralTeleoperationServer(LEADER_PORT)
     

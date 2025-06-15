@@ -18,6 +18,7 @@ import logging
 import asyncio
 from typing import Dict, Any, Optional, Union
 from threading import Lock
+import time
 
 from lerobot.common.robots.robot import Robot
 from lerobot.common.teleoperators.teleoperator import Teleoperator
@@ -124,14 +125,37 @@ class RobotManager:
         
         try:
             with self.connection_lock:
+                # Check if already connected
                 if robot.is_connected:
                     logger.warning(f"Robot {name} is already connected")
                     return True
                 
+                logger.info(f"Attempting to connect to robot: {name}")
+                
                 # Connect to the robot
                 robot.connect(calibrate=calibrate)
-                logger.info(f"Successfully connected to robot: {name}")
-                return True
+                
+                # Verify connection was successful
+                connection_verified = False
+                for attempt in range(3):  # Try up to 3 times to verify
+                    await asyncio.sleep(0.5)  # Give time for connection to establish
+                    
+                    if robot.is_connected:
+                        connection_verified = True
+                        break
+                    elif hasattr(robot, 'bus') and hasattr(robot.bus, 'is_connected'):
+                        if robot.bus.is_connected:
+                            connection_verified = True
+                            break
+                    
+                    logger.debug(f"Connection verification attempt {attempt + 1} for {name}: {robot.is_connected}")
+                
+                if connection_verified:
+                    logger.info(f"✅ Successfully connected to robot: {name}")
+                    return True
+                else:
+                    logger.error(f"❌ Connection to robot {name} not verified after connect() call")
+                    return False
                 
         except (DeviceNotConnectedError, DeviceAlreadyConnectedError) as e:
             logger.error(f"Failed to connect to robot {name}: {e}")
@@ -244,18 +268,50 @@ class RobotManager:
         robot = self.robots[robot_name]
         robot_config = self.robot_configs[robot_name]
         
+        # Get connection status with additional checks
+        is_connected = False
+        connection_details = "Unknown"
+        
+        try:
+            # Primary check: robot's is_connected property
+            is_connected = robot.is_connected
+            
+            # Additional verification for motor bus based robots
+            if hasattr(robot, 'bus') and hasattr(robot.bus, 'is_connected'):
+                bus_connected = robot.bus.is_connected
+                connection_details = f"Robot: {is_connected}, Bus: {bus_connected}"
+                
+                # If there's a mismatch, prefer the bus status for accuracy
+                if is_connected != bus_connected:
+                    logger.warning(f"Connection status mismatch for {robot_name}: {connection_details}")
+                    is_connected = bus_connected
+            else:
+                connection_details = f"Robot: {is_connected}"
+                
+            logger.debug(f"Status check for {robot_name}: {connection_details}")
+                
+        except Exception as e:
+            logger.error(f"Error checking connection status for {robot_name}: {e}")
+            is_connected = False
+            connection_details = f"Error: {str(e)}"
+        
         status = {
             "name": robot_name,
             "robot_type": robot_config.robot_type,
             "robot_class": robot_config.robot_class,
-            "is_connected": robot.is_connected,
+            "is_connected": is_connected,
             "port": robot_config.port,
             "id": robot_config.id,
+            "connection_details": connection_details,  # Add debug info
         }
         
         # Add calibration status if available
-        if hasattr(robot, "is_calibrated"):
-            status["is_calibrated"] = robot.is_calibrated
+        try:
+            if hasattr(robot, "is_calibrated"):
+                status["is_calibrated"] = robot.is_calibrated
+        except Exception as e:
+            logger.warning(f"Error checking calibration status for {robot_name}: {e}")
+            status["is_calibrated"] = False
         
         return status
     
@@ -325,4 +381,64 @@ class RobotManager:
         self.robot_configs.clear()
         self.action_queues.clear()
         
-        logger.info("Robot manager cleanup completed") 
+        logger.info("Robot manager cleanup completed")
+    
+    async def get_robot_position(self, robot_name: str) -> Dict[str, Any]:
+        """Get current position/state of a specific robot."""
+        if robot_name not in self.robots:
+            raise ValueError(f"Robot {robot_name} not found")
+        
+        robot = self.robots[robot_name]
+        robot_config = self.robot_configs[robot_name]
+        
+        if not robot.is_connected:
+            raise DeviceNotConnectedError(f"Robot {robot_name} is not connected")
+        
+        try:
+            # Get current positions based on robot type
+            if robot_config.robot_type == "follower":
+                # For followers, get current motor positions
+                if hasattr(robot, 'bus') and hasattr(robot.bus, 'read_with_motor_ids'):
+                    # Read current positions from all motors
+                    positions = {}
+                    for motor_name in robot.bus.motors:
+                        try:
+                            # Read current position for this motor
+                            motor_positions = robot.bus.read_with_motor_ids([motor_name], "Present_Position")
+                            if motor_positions and len(motor_positions) > 0:
+                                positions[f"{motor_name}.pos"] = float(motor_positions[0])
+                            else:
+                                positions[f"{motor_name}.pos"] = 0.0
+                        except Exception as e:
+                            logger.warning(f"Error reading position for motor {motor_name}: {e}")
+                            positions[f"{motor_name}.pos"] = 0.0
+                    
+                    return {
+                        "robot": robot_name,
+                        "positions": positions,
+                        "timestamp": time.time()
+                    }
+                else:
+                    # Fallback: try to get positions using robot's internal state
+                    logger.warning(f"Could not access motor bus for {robot_name}, using fallback method")
+                    return {
+                        "robot": robot_name,
+                        "positions": {},
+                        "error": "Unable to read current positions",
+                        "timestamp": time.time()
+                    }
+                    
+            elif robot_config.robot_type == "leader":
+                # For leaders, get the current action/position
+                action = robot.get_action()
+                return {
+                    "robot": robot_name,
+                    "positions": action,
+                    "timestamp": time.time()
+                }
+            else:
+                raise ValueError(f"Unknown robot type: {robot_config.robot_type}")
+                
+        except Exception as e:
+            logger.error(f"Error getting position from robot {robot_name}: {e}")
+            raise 

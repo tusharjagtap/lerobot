@@ -72,6 +72,7 @@ class WebRTCRobotServer:
         self.app.router.add_post("/api/robots/{robot_name}/disconnect", self._handle_disconnect_robot)
         self.app.router.add_post("/api/robots/{robot_name}/action", self._handle_send_action)
         self.app.router.add_get("/api/robots/{robot_name}/action", self._handle_get_action)
+        self.app.router.add_get("/api/robots/{robot_name}/position", self._handle_get_position)
         self.app.router.add_post("/api/emergency_stop", self._handle_emergency_stop)
         self.app.router.add_get("/api/status", self._handle_server_status)
         
@@ -105,19 +106,94 @@ class WebRTCRobotServer:
         <head>
             <title>LeRobot WebRTC Controller</title>
             <style>
-                body { font-family: Arial, sans-serif; margin: 20px; }
-                .robot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
-                .robot-card { border: 1px solid #ccc; padding: 20px; border-radius: 8px; }
-                .status-connected { color: green; }
-                .status-disconnected { color: red; }
-                button { margin: 5px; padding: 10px; }
-                .action-controls { margin-top: 15px; }
-                input[type="number"] { width: 80px; margin: 2px; }
+                body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+                .robot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 20px; }
+                .robot-card { 
+                    border: 1px solid #ccc; 
+                    padding: 20px; 
+                    border-radius: 8px; 
+                    background: white;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                }
+                .robot-card h3 { margin-top: 0; color: #333; }
+                .status-connected { 
+                    color: #28a745; 
+                    font-weight: bold; 
+                    font-size: 1.1em;
+                    padding: 5px 10px;
+                    background: #d4edda;
+                    border-radius: 4px;
+                    display: inline-block;
+                }
+                .status-disconnected { 
+                    color: #dc3545; 
+                    font-weight: bold; 
+                    font-size: 1.1em;
+                    padding: 5px 10px;
+                    background: #f8d7da;
+                    border-radius: 4px;
+                    display: inline-block;
+                }
+                button { 
+                    margin: 5px; 
+                    padding: 10px 15px; 
+                    border: none;
+                    border-radius: 4px;
+                    cursor: pointer;
+                    background: #007bff;
+                    color: white;
+                }
+                button:hover { background: #0056b3; }
+                .action-controls { 
+                    margin-top: 15px; 
+                    padding-top: 15px;
+                    border-top: 1px solid #eee;
+                }
+                .action-controls h4 {
+                    margin: 0 0 10px 0;
+                    color: #333;
+                    font-size: 14px;
+                }
+                .action-controls label {
+                    font-size: 12px;
+                    font-weight: bold;
+                    color: #555;
+                    align-self: center;
+                }
+                input[type="number"] { 
+                    width: 80px; 
+                    margin: 2px; 
+                    padding: 5px;
+                    border: 1px solid #ddd;
+                    border-radius: 3px;
+                    font-size: 12px;
+                }
+                .action-controls button {
+                    margin: 5px 2px;
+                    padding: 8px 12px;
+                    font-size: 12px;
+                }
+                .current-position {
+                    margin-top: 15px;
+                    padding-top: 15px;
+                    border-top: 1px solid #eee;
+                }
+                .current-position h4 {
+                    margin: 0 0 10px 0;
+                    color: #333;
+                    font-size: 14px;
+                }
+                .header { text-align: center; margin-bottom: 30px; }
+                .header h1 { color: #333; margin-bottom: 10px; }
+                .header p { color: #666; margin: 0; }
             </style>
         </head>
-        <body>
-            <h1>LeRobot WebRTC Controller</h1>
-            <div id="status"></div>
+                 <body>
+            <div class="header">
+                <h1>🤖 LeRobot WebRTC Controller</h1>
+                <p>Real-time robot connection status and control interface</p>
+                <p><small>Status updates every 2 seconds automatically</small></p>
+            </div>
             <div id="robots" class="robot-grid"></div>
             
             <script>
@@ -125,13 +201,13 @@ class WebRTCRobotServer:
                     try {
                         const response = await fetch('/api/robots');
                         const robots = await response.json();
-                        displayRobots(robots);
+                        await displayRobots(robots);
                     } catch (error) {
                         console.error('Error loading robots:', error);
                     }
                 }
                 
-                function displayRobots(robots) {
+                async function displayRobots(robots) {
                     const container = document.getElementById('robots');
                     container.innerHTML = '';
                     
@@ -141,71 +217,418 @@ class WebRTCRobotServer:
                         card.innerHTML = `
                             <h3>${name}</h3>
                             <p>Type: ${type}</p>
-                            <div id="status-${name}" class="status-disconnected">Disconnected</div>
+                            <div id="status-${name}" class="status-disconnected">Checking...</div>
+                            <div id="details-${name}" style="font-size: 12px; color: #666; margin: 5px 0;"></div>
                             <button onclick="connectRobot('${name}')">Connect</button>
                             <button onclick="disconnectRobot('${name}')">Disconnect</button>
+                            
+                            <div class="current-position">
+                                <h4>📍 Current Position:</h4>
+                                <div id="current-position-${name}" style="font-size: 11px; background: #f8f9fa; padding: 8px; border-radius: 4px; margin: 5px 0;">
+                                    <div style="color: #666;">Position data will appear when connected...</div>
+                                </div>
+                                <button onclick="updateCurrentPosition('${name}')" style="font-size: 11px; padding: 4px 8px;">🔄 Refresh Position</button>
+                            </div>
+                            
                             <div class="action-controls">
-                                <h4>Send Action:</h4>
-                                <input type="number" id="dx-${name}" placeholder="delta_x" step="0.1" value="0.1">
-                                <input type="number" id="dy-${name}" placeholder="delta_y" step="0.1" value="0.0">
-                                <input type="number" id="dz-${name}" placeholder="delta_z" step="0.1" value="0.0">
-                                <button onclick="sendAction('${name}')">Send</button>
+                                <h4>Send Joint Position Action:</h4>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin: 10px 0;">
+                                    <label>Shoulder Pan:</label>
+                                    <input type="number" id="shoulder_pan-${name}" step="0.1" value="0.0" min="-180" max="180">
+                                    <label>Shoulder Lift:</label>
+                                    <input type="number" id="shoulder_lift-${name}" step="0.1" value="0.0" min="-180" max="180">
+                                    <label>Elbow Flex:</label>
+                                    <input type="number" id="elbow_flex-${name}" step="0.1" value="0.0" min="-180" max="180">
+                                    <label>Wrist Flex:</label>
+                                    <input type="number" id="wrist_flex-${name}" step="0.1" value="0.0" min="-180" max="180">
+                                    <label>Wrist Roll:</label>
+                                    <input type="number" id="wrist_roll-${name}" step="0.1" value="0.0" min="-180" max="180">
+                                    <label>Gripper:</label>
+                                    <input type="number" id="gripper-${name}" step="1" value="50" min="0" max="100">
+                                </div>
+                                <button onclick="sendAction('${name}')">Send Joint Action</button>
+                                <button onclick="presetAction('${name}', 'home')" style="background: #28a745;">Home Position</button>
+                                <button onclick="presetAction('${name}', 'safe')" style="background: #ffc107; color: #000;">Safe Position</button>
+                                <button onclick="copyCurrentToInputs('${name}')" style="background: #17a2b8;">📋 Copy Current → Inputs</button>
                             </div>
                         `;
                         container.appendChild(card);
+                        
+                        // Check individual robot status
+                        updateRobotStatus(name);
+                        
+                        // Update current position if connected
+                        updateCurrentPosition(name);
+                    }
+                }
+                
+                async function updateRobotStatus(robotName) {
+                    try {
+                        const response = await fetch(`/api/robots/${robotName}/status`);
+                        const status = await response.json();
+                        
+                        const statusElement = document.getElementById(`status-${robotName}`);
+                        const detailsElement = document.getElementById(`details-${robotName}`);
+                        
+                        console.log(`Status update for ${robotName}:`, status); // Debug log
+                        
+                        if (status.is_connected) {
+                            statusElement.textContent = 'Connected';
+                            statusElement.className = 'status-connected';
+                            
+                            let details = `Port: ${status.port}`;
+                            if (status.is_calibrated !== undefined) {
+                                details += `, Calibrated: ${status.is_calibrated ? 'Yes' : 'No'}`;
+                            }
+                            if (status.connection_details) {
+                                details += ` (${status.connection_details})`;
+                            }
+                            detailsElement.textContent = details;
+                        } else {
+                            statusElement.textContent = 'Disconnected';
+                            statusElement.className = 'status-disconnected';
+                            let details = `Port: ${status.port}`;
+                            if (status.connection_details) {
+                                details += ` (${status.connection_details})`;
+                            }
+                            detailsElement.textContent = details;
+                        }
+                    } catch (error) {
+                        console.error(`Error getting status for ${robotName}:`, error);
+                        const statusElement = document.getElementById(`status-${robotName}`);
+                        const detailsElement = document.getElementById(`details-${robotName}`);
+                        statusElement.textContent = 'Error';
+                        statusElement.className = 'status-disconnected';
+                        detailsElement.textContent = `Error: ${error.message}`;
                     }
                 }
                 
                 async function connectRobot(name) {
                     try {
+                        // Update UI to show connecting
+                        document.getElementById(`status-${name}`).textContent = 'Connecting...';
+                        document.getElementById(`status-${name}`).className = 'status-disconnected';
+                        
                         const response = await fetch(`/api/robots/${name}/connect`, { method: 'POST' });
                         const result = await response.json();
+                        
                         if (result.success) {
-                            document.getElementById(`status-${name}`).textContent = 'Connected';
-                            document.getElementById(`status-${name}`).className = 'status-connected';
+                            // Update status after successful connection
+                            await updateRobotStatus(name);
+                        } else {
+                            document.getElementById(`status-${name}`).textContent = 'Connection Failed';
+                            document.getElementById(`status-${name}`).className = 'status-disconnected';
                         }
                     } catch (error) {
                         console.error('Error connecting robot:', error);
+                        document.getElementById(`status-${name}`).textContent = 'Connection Error';
+                        document.getElementById(`status-${name}`).className = 'status-disconnected';
                     }
                 }
                 
                 async function disconnectRobot(name) {
                     try {
+                        // Update UI to show disconnecting
+                        document.getElementById(`status-${name}`).textContent = 'Disconnecting...';
+                        
                         const response = await fetch(`/api/robots/${name}/disconnect`, { method: 'POST' });
                         const result = await response.json();
+                        
                         if (result.success) {
-                            document.getElementById(`status-${name}`).textContent = 'Disconnected';
+                            // Update status after successful disconnection
+                            await updateRobotStatus(name);
+                        } else {
+                            document.getElementById(`status-${name}`).textContent = 'Disconnect Failed';
                             document.getElementById(`status-${name}`).className = 'status-disconnected';
                         }
                     } catch (error) {
                         console.error('Error disconnecting robot:', error);
+                        document.getElementById(`status-${name}`).textContent = 'Disconnect Error';
+                        document.getElementById(`status-${name}`).className = 'status-disconnected';
                     }
                 }
                 
                 async function sendAction(name) {
                     try {
-                        const dx = parseFloat(document.getElementById(`dx-${name}`).value) || 0.0;
-                        const dy = parseFloat(document.getElementById(`dy-${name}`).value) || 0.0;
-                        const dz = parseFloat(document.getElementById(`dz-${name}`).value) || 0.0;
+                        // Get joint position values
+                        const shoulderPan = parseFloat(document.getElementById(`shoulder_pan-${name}`).value) || 0.0;
+                        const shoulderLift = parseFloat(document.getElementById(`shoulder_lift-${name}`).value) || 0.0;
+                        const elbowFlex = parseFloat(document.getElementById(`elbow_flex-${name}`).value) || 0.0;
+                        const wristFlex = parseFloat(document.getElementById(`wrist_flex-${name}`).value) || 0.0;
+                        const wristRoll = parseFloat(document.getElementById(`wrist_roll-${name}`).value) || 0.0;
+                        const gripper = parseFloat(document.getElementById(`gripper-${name}`).value) || 50.0;
                         
-                        const action = { "delta_x": dx, "delta_y": dy, "delta_z": dz };
+                        // Create joint position action (same format as your curl command)
+                        const action = {
+                            "shoulder_pan.pos": shoulderPan,
+                            "shoulder_lift.pos": shoulderLift,
+                            "elbow_flex.pos": elbowFlex,
+                            "wrist_flex.pos": wristFlex,
+                            "wrist_roll.pos": wristRoll,
+                            "gripper.pos": gripper
+                        };
+                        
+                        console.log(`Sending action to ${name}:`, action);
+                        
                         const response = await fetch(`/api/robots/${name}/action`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(action)
                         });
+                        
                         const result = await response.json();
-                        console.log('Action result:', result);
+                        
+                        if (result.success) {
+                            console.log('✅ Action sent successfully:', result);
+                            // Show success feedback
+                            showActionFeedback(name, 'success', 'Action sent successfully!');
+                        } else {
+                            console.error('❌ Action failed:', result);
+                            showActionFeedback(name, 'error', `Action failed: ${result.error || 'Unknown error'}`);
+                        }
                     } catch (error) {
                         console.error('Error sending action:', error);
+                        showActionFeedback(name, 'error', `Network error: ${error.message}`);
+                    }
+                }
+                
+                async function presetAction(name, preset) {
+                    try {
+                        let action;
+                        
+                        // Define preset positions
+                        switch(preset) {
+                            case 'home':
+                                action = {
+                                    "shoulder_pan.pos": 0.0,
+                                    "shoulder_lift.pos": 0.0,
+                                    "elbow_flex.pos": 0.0,
+                                    "wrist_flex.pos": 0.0,
+                                    "wrist_roll.pos": 0.0,
+                                    "gripper.pos": 50.0
+                                };
+                                break;
+                            case 'safe':
+                                action = {
+                                    "shoulder_pan.pos": 0.0,
+                                    "shoulder_lift.pos": -30.0,
+                                    "elbow_flex.pos": 60.0,
+                                    "wrist_flex.pos": -30.0,
+                                    "wrist_roll.pos": 0.0,
+                                    "gripper.pos": 0.0
+                                };
+                                break;
+                            default:
+                                throw new Error(`Unknown preset: ${preset}`);
+                        }
+                        
+                        console.log(`Sending ${preset} preset to ${name}:`, action);
+                        
+                        const response = await fetch(`/api/robots/${name}/action`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(action)
+                        });
+                        
+                        const result = await response.json();
+                        
+                        if (result.success) {
+                            console.log(`✅ ${preset} preset sent successfully:`, result);
+                            showActionFeedback(name, 'success', `${preset.charAt(0).toUpperCase() + preset.slice(1)} position sent!`);
+                            
+                            // Update the input fields to show the preset values
+                            document.getElementById(`shoulder_pan-${name}`).value = action["shoulder_pan.pos"];
+                            document.getElementById(`shoulder_lift-${name}`).value = action["shoulder_lift.pos"];
+                            document.getElementById(`elbow_flex-${name}`).value = action["elbow_flex.pos"];
+                            document.getElementById(`wrist_flex-${name}`).value = action["wrist_flex.pos"];
+                            document.getElementById(`wrist_roll-${name}`).value = action["wrist_roll.pos"];
+                            document.getElementById(`gripper-${name}`).value = action["gripper.pos"];
+                        } else {
+                            console.error(`❌ ${preset} preset failed:`, result);
+                            showActionFeedback(name, 'error', `${preset} preset failed: ${result.error || 'Unknown error'}`);
+                        }
+                    } catch (error) {
+                        console.error(`Error sending ${preset} preset:`, error);
+                        showActionFeedback(name, 'error', `Error: ${error.message}`);
+                    }
+                }
+                
+                function showActionFeedback(robotName, type, message) {
+                    // Create or update feedback element
+                    let feedbackElement = document.getElementById(`feedback-${robotName}`);
+                    if (!feedbackElement) {
+                        feedbackElement = document.createElement('div');
+                        feedbackElement.id = `feedback-${robotName}`;
+                        feedbackElement.style.cssText = `
+                            margin: 10px 0;
+                            padding: 8px;
+                            border-radius: 4px;
+                            font-size: 12px;
+                            font-weight: bold;
+                        `;
+                        
+                        // Insert after the robot card header
+                        const robotCard = document.getElementById(`details-${robotName}`).parentElement;
+                        robotCard.insertBefore(feedbackElement, robotCard.children[2]); // After status and details
+                    }
+                    
+                    // Set styling based on type
+                    if (type === 'success') {
+                        feedbackElement.style.backgroundColor = '#d4edda';
+                        feedbackElement.style.color = '#155724';
+                        feedbackElement.style.border = '1px solid #c3e6cb';
+                    } else {
+                        feedbackElement.style.backgroundColor = '#f8d7da';
+                        feedbackElement.style.color = '#721c24';
+                        feedbackElement.style.border = '1px solid #f5c6cb';
+                    }
+                    
+                    feedbackElement.textContent = message;
+                    
+                    // Clear feedback after 3 seconds
+                    setTimeout(() => {
+                        if (feedbackElement.parentNode) {
+                            feedbackElement.parentNode.removeChild(feedbackElement);
+                        }
+                    }, 3000);
+                }
+                
+                async function updateCurrentPosition(robotName) {
+                    try {
+                        const response = await fetch(`/api/robots/${robotName}/position`);
+                        
+                        if (response.ok) {
+                            const positionData = await response.json();
+                            displayCurrentPosition(robotName, positionData);
+                        } else {
+                            // Robot might not be connected or doesn't support position reading
+                            const positionElement = document.getElementById(`current-position-${robotName}`);
+                            if (positionElement) {
+                                positionElement.innerHTML = '<div style="color: #dc3545;">⚠️ Unable to read position (robot may be disconnected)</div>';
+                            }
+                        }
+                    } catch (error) {
+                        console.log(`Position update failed for ${robotName}:`, error.message);
+                        const positionElement = document.getElementById(`current-position-${robotName}`);
+                        if (positionElement) {
+                            positionElement.innerHTML = '<div style="color: #666;">Position unavailable</div>';
+                        }
+                    }
+                }
+                
+                function displayCurrentPosition(robotName, positionData) {
+                    const positionElement = document.getElementById(`current-position-${robotName}`);
+                    if (!positionElement) return;
+                    
+                    if (positionData.error) {
+                        positionElement.innerHTML = `<div style="color: #dc3545;">❌ ${positionData.error}</div>`;
+                        return;
+                    }
+                    
+                    const positions = positionData.positions || {};
+                    const timestamp = new Date(positionData.timestamp * 1000).toLocaleTimeString();
+                    
+                    let html = `<div style="color: #28a745; font-weight: bold; margin-bottom: 5px;">✅ Live Position Data</div>`;
+                    html += `<div style="font-size: 10px; color: #666; margin-bottom: 8px;">Updated: ${timestamp}</div>`;
+                    
+                    if (Object.keys(positions).length === 0) {
+                        html += '<div style="color: #ffc107;">⚠️ No position data available</div>';
+                    } else {
+                        html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 3px; font-family: monospace;">';
+                        
+                        // Display positions in a nice format
+                        for (const [joint, value] of Object.entries(positions)) {
+                            const jointName = joint.replace('.pos', '').replace('_', ' ');
+                            const formattedValue = typeof value === 'number' ? value.toFixed(1) : value;
+                            html += `
+                                <div style="font-weight: bold; color: #495057;">${jointName}:</div>
+                                <div style="color: #007bff;">${formattedValue}°</div>
+                            `;
+                        }
+                        html += '</div>';
+                    }
+                    
+                    positionElement.innerHTML = html;
+                }
+                
+                function copyCurrentToInputs(robotName) {
+                    try {
+                        // Get the current position display element
+                        const positionElement = document.getElementById(`current-position-${robotName}`);
+                        if (!positionElement) {
+                            showActionFeedback(robotName, 'error', 'Position data not available');
+                            return;
+                        }
+                        
+                        // We need to fetch the current position data fresh
+                        fetch(`/api/robots/${robotName}/position`)
+                            .then(response => response.json())
+                            .then(positionData => {
+                                if (positionData.error) {
+                                    showActionFeedback(robotName, 'error', `Cannot copy position: ${positionData.error}`);
+                                    return;
+                                }
+                                
+                                const positions = positionData.positions || {};
+                                let copiedCount = 0;
+                                
+                                // Map positions to input fields
+                                const jointMapping = {
+                                    'shoulder_pan.pos': 'shoulder_pan',
+                                    'shoulder_lift.pos': 'shoulder_lift',
+                                    'elbow_flex.pos': 'elbow_flex',
+                                    'wrist_flex.pos': 'wrist_flex',
+                                    'wrist_roll.pos': 'wrist_roll',
+                                    'gripper.pos': 'gripper'
+                                };
+                                
+                                for (const [posKey, inputKey] of Object.entries(jointMapping)) {
+                                    if (positions[posKey] !== undefined) {
+                                        const inputElement = document.getElementById(`${inputKey}-${robotName}`);
+                                        if (inputElement) {
+                                            inputElement.value = positions[posKey].toFixed(1);
+                                            copiedCount++;
+                                        }
+                                    }
+                                }
+                                
+                                if (copiedCount > 0) {
+                                    showActionFeedback(robotName, 'success', `✅ Copied ${copiedCount} joint positions to inputs`);
+                                } else {
+                                    showActionFeedback(robotName, 'error', 'No position data available to copy');
+                                }
+                            })
+                            .catch(error => {
+                                console.error('Error copying positions:', error);
+                                showActionFeedback(robotName, 'error', 'Failed to copy positions');
+                            });
+                    } catch (error) {
+                        console.error('Error in copyCurrentToInputs:', error);
+                        showActionFeedback(robotName, 'error', 'Error copying positions');
                     }
                 }
                 
                 // Load robots on page load
                 loadRobots();
                 
-                // Refresh status every 2 seconds
-                setInterval(loadRobots, 2000);
+                // Refresh status and positions every 2 seconds
+                setInterval(async () => {
+                    // Get current robot list and update their status and positions
+                    try {
+                        const response = await fetch('/api/robots');
+                        const robots = await response.json();
+                        for (const robotName of Object.keys(robots)) {
+                            await updateRobotStatus(robotName);
+                            // Only update positions for connected robots to avoid spam
+                            const statusElement = document.getElementById(`status-${robotName}`);
+                            if (statusElement && statusElement.textContent === 'Connected') {
+                                updateCurrentPosition(robotName);
+                            }
+                        }
+                    } catch (error) {
+                        console.error('Error refreshing robot data:', error);
+                    }
+                }, 2000);
             </script>
         </body>
         </html>
@@ -314,6 +737,19 @@ class WebRTCRobotServer:
             return web.json_response({"error": str(e)}, status=404)
         except Exception as e:
             logger.error(f"Error getting action: {e}")
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def _handle_get_position(self, request: web.Request) -> web.Response:
+        """Get current position from a robot."""
+        robot_name = request.match_info["robot_name"]
+        
+        try:
+            position = await self.robot_manager.get_robot_position(robot_name)
+            return web.json_response(position)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=404)
+        except Exception as e:
+            logger.error(f"Error getting position: {e}")
             return web.json_response({"error": str(e)}, status=500)
     
     async def _handle_emergency_stop(self, request: web.Request) -> web.Response:

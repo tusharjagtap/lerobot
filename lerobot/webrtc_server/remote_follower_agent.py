@@ -141,15 +141,19 @@ class RemoteFollowerAgent:
 
 async def main():
     """Run the remote follower agent."""
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
     
     # Configure your remote follower
     config = {
-        "robot_port": "/dev/tty.usbmodem123456789",  # Update this
+        "robot_port": "/dev/tty.usbmodem58A60699991",  # Update this to match your robot
         "robot_id": "remote_follower_1",
         "agent_name": "warehouse_robot_1", 
         "location": "Warehouse Floor 2",
-        "central_server_host": "192.168.1.100",  # Update with central server IP
+        "central_server_host": "127.0.0.1",  # Changed to localhost since running on same machine
+        "central_server_port": 8081  # Make sure port is specified
     }
     
     agent = RemoteFollowerAgent(**config)
